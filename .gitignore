@@ -30,3 +30,29 @@
 *.exe
 *.out
 *.app
+
+# Debug files
+*.dSYM/
+*.su
+*.idb
+*.pdb
+
+# Kernel Module Compile Results
+*.mod*
+*.cmd
+.tmp_versions/
+modules.order
+Module.symvers
+Mkfile.old
+dkms.conf
+
+obj/
+__pycache__
+*.bin
+*.mymodel
+*.tmp
+perf.*
+
+temp/
+.vscode/
+*.out.*
