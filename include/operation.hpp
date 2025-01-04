@@ -38,9 +38,12 @@ Tensor *new_tensor(int dtype, unsigned int dims, ...);
 void free_tensor(Tensor *tensor);
 
 void layer_normalize(int N, float *vector, float *W, float *B, float *buf_sizeN, float *ones);
+void layer_normalize(int N, float *vector, float *W, float *B, float *buf_sizeN, float *ones, int batch_size);
 void layer_linear(int M, int N, float *input, float *W, float *B, float *output);
+void layer_linear(int M, int N, float *input, float *W, float *B, float *output, int batch_size);
 void layer_softmax(int N, float *vector);
 void layer_GeLU(int N, float *vector);
+void layer_GeLU(int N, float *vector, int batch_size);
 
 int vector_argmax(int m, float *x, int incx);
 void vector_onehot(float* dest, int n, int idx);

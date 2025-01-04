@@ -63,9 +63,27 @@ void layer_normalize(int N, float *vector, float *W, float *B, float *buf_sizeN,
     memcpy(vector, buf_sizeN, sizeof(float) * N);
 }
 
+void layer_normalize(int N, float *vector, float *W, float *B, float *buf_sizeN, float *ones, int batch_size) {
+    for (int i = 0; i < batch_size; i++) {
+        float avg = cblas_sdot(N, ones, 1, vector + i * N, 1) / N;
+        cblas_saxpy(N, -avg, ones, 1, vector + i * N, 1);
+        float std = cblas_snrm2(N, vector + i * N, 1) / sqrtf(N);
+        memcpy(buf_sizeN, B, sizeof(float) * N);
+        cblas_ssbmv(CblasRowMajor, CblasUpper, N, 0, 1.0/std, W, 1, vector + i * N, 1, 1.0, buf_sizeN, 1);
+        memcpy(vector + i * N, buf_sizeN, sizeof(float) * N);
+    }
+}
+
 void layer_linear(int M, int N, float *input, float *W, float *B, float *output) {
     memcpy(output, B, sizeof(float) * M);
     cblas_sgemv(CblasRowMajor, CblasNoTrans, M, N, 1.0, W, N, input, 1, 1.0, output, 1);
+}
+
+void layer_linear(int M, int N, float *input, float *W, float *B, float *output, int batch_size) {
+    for (int i = 0; i < batch_size; i++) {
+        memcpy(output + i * M, B, sizeof(float) * M);
+        cblas_sgemv(CblasRowMajor, CblasNoTrans, M, N, 1.0, W, N, input + i * N, 1, 1.0, output + i * M, 1);
+    }
 }
 
 void layer_softmax(int N, float *vector) {
@@ -86,6 +104,17 @@ void layer_GeLU(int N, float *vector) {
         vector[i + 2] = 0.5 * vector[i + 2] * (1 + tanh(sqrt(2.0 / M_PI) * (vector[i + 2] + 0.044715 * powf(vector[i + 2], 3))));
         vector[i + 3] = 0.5 * vector[i + 3] * (1 + tanh(sqrt(2.0 / M_PI) * (vector[i + 3] + 0.044715 * powf(vector[i + 3], 3))));
     }
+}
+
+void layer_GeLU(int N, float *vector, int batch_size) {
+    for (int i = 0; i < batch_size; i++) {
+        for (int j = 0; j < N; j += 4) {
+            vector[i * N + j] = 0.5 * vector[i * N + j] * (1 + tanh(sqrt(2.0 / M_PI) * (vector[i * N + j] + 0.044715 * powf(vector[i * N + j], 3))));
+            vector[i * N + j + 1] = 0.5 * vector[i * N + j + 1] * (1 + tanh(sqrt(2.0 / M_PI) * (vector[i * N + j + 1] + 0.044715 * powf(vector[i * N + j + 1], 3))));
+            vector[i * N + j + 2] = 0.5 * vector[i * N + j + 2] * (1 + tanh(sqrt(2.0 / M_PI) * (vector[i * N + j + 2] + 0.044715 * powf(vector[i * N + j + 2], 3))));
+            vector[i * N + j + 3] = 0.5 * vector[i * N + j + 3] * (1 + tanh(sqrt(2.0 / M_PI) * (vector[i * N + j + 3] + 0.044715 * powf(vector[i * N + j + 3], 3))));
+        }
+    }    
 }
 
 int vector_argmax(int m, float *x, int incx) {

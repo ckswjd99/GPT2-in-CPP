@@ -276,6 +276,7 @@ void Decoder::forward_batch(int batch_size, float *last_input, float *last_outpu
     float *last_input_temp = last_input;
     float *last_output_temp = last_output;
 
+    // MALLOC BUFFER POINTERS
     float **bufs_embedded = (float **)malloc(sizeof(float *) * batch_size);
     float **bufs_ln1 = (float **)malloc(sizeof(float *) * batch_size);
     float **bufs_layer_norm = (float **)malloc(sizeof(float *) * batch_size);
@@ -306,70 +307,70 @@ void Decoder::forward_batch(int batch_size, float *last_input, float *last_outpu
         Vs[batch_idx] = V + batch_idx * d_hidden * DECODER_NUM_TOKEN_INIT;
     }
 
-    for (int batch_idx=0; batch_idx<batch_size; batch_idx++) {
-        // Residual Connection - Fanout
-        memcpy(bufs_embedded[batch_idx], last_input_temp + batch_idx * d_hidden, sizeof(float) * this->d_hidden);
-        memcpy(bufs_ln1[batch_idx], last_input_temp + batch_idx * d_hidden, sizeof(float) * this->d_hidden);
+    // Residual Connection - Fanout
+    memcpy(_buf_embedded, last_input_temp, sizeof(float) * this->d_hidden * batch_size);
+    memcpy(_buf_ln1, last_input_temp, sizeof(float) * this->d_hidden * batch_size);
 
-        // Layer Normalization
-        layer_normalize(d_hidden, bufs_ln1[batch_idx], W_ln1, B_ln1, bufs_layer_norm[batch_idx], ones);
-    }
+    // Layer Normalization
+    layer_normalize(d_hidden, _buf_ln1, W_ln1, B_ln1, _buf_layer_norm, ones, batch_size);
         
+    // Compute QKV
+    layer_linear(d_hidden, d_hidden, _buf_ln1, W_Q, B_Q, Q, batch_size);
     for (int batch_idx=0; batch_idx<batch_size; batch_idx++) {
-        // Compute QKV
-        layer_linear(d_hidden, d_hidden, bufs_ln1[batch_idx], W_Q, B_Q, Qs[batch_idx]);
+        // layer_linear(d_hidden, d_hidden, bufs_ln1[batch_idx], W_Q, B_Q, Qs[batch_idx]);
         layer_linear(d_hidden, d_hidden, bufs_ln1[batch_idx], W_K, B_K, Ks[batch_idx] + d_hidden * num_inferenced);
         layer_linear(d_hidden, d_hidden, bufs_ln1[batch_idx], W_V, B_V, Vs[batch_idx] + d_hidden * num_inferenced);
-
     }
 
+    // Compute MHA
     for (int batch_idx=0; batch_idx<batch_size; batch_idx++) {
-        // Compute MHA
         for (int i=0; i<d_head; i++) {
             // Attention
-            cblas_sgemv(CblasColMajor, CblasTrans, d_hid_per_head, num_inferenced+1, 1.0/sqrtf(d_hid_per_head), Ks[batch_idx] + i * d_hid_per_head, d_hidden, Qs[batch_idx] + i * d_hid_per_head, 1, 0.0, bufs_attn[batch_idx], 1);
+            cblas_sgemv(
+                CblasColMajor, CblasTrans, 
+                d_hid_per_head, num_inferenced+1, 
+                1.0/sqrtf(d_hid_per_head), Ks[batch_idx] + i * d_hid_per_head, d_hidden, 
+                Qs[batch_idx] + i * d_hid_per_head, 1, 
+                0.0, bufs_attn[batch_idx], 1
+            );
             
             // Softmax
             layer_softmax(num_inferenced+1, bufs_attn[batch_idx]);
 
             // SHA
-            cblas_sgemv(CblasColMajor, CblasNoTrans, d_hid_per_head, num_inferenced+1, 1.0, Vs[batch_idx] + i * d_hid_per_head, d_hidden, bufs_attn[batch_idx], 1, 0.0, bufs_sha[batch_idx] + i * d_hid_per_head, 1);
+            cblas_sgemv(
+                CblasColMajor, CblasNoTrans, 
+                d_hid_per_head, num_inferenced+1, 
+                1.0, Vs[batch_idx] + i * d_hid_per_head, d_hidden, 
+                bufs_attn[batch_idx], 1, 
+                0.0, bufs_sha[batch_idx] + i * d_hid_per_head, 1
+            );
         }
 
     }
 
-    for (int batch_idx=0; batch_idx<batch_size; batch_idx++) {
-        // MHA
-        layer_linear(d_hidden, d_hidden, bufs_sha[batch_idx], W_O, B_O, bufs_o[batch_idx]);
+    // MHA
+    layer_linear(d_hidden, d_hidden, _buf_sha, W_O, B_O, _buf_o, batch_size);
 
-        // Residual Connection - Sum and Fanout
-        cblas_saxpy(d_hidden, 1.0, bufs_o[batch_idx], 1, bufs_embedded[batch_idx], 1);
-        memcpy(bufs_ln2[batch_idx], bufs_embedded[batch_idx], sizeof(float) * d_hidden);
+    // Residual Connection - Sum and Fanout
+    cblas_saxpy(d_hidden * batch_size, 1.0, _buf_o, 1, _buf_embedded, 1);
+    memcpy(_buf_ln2, _buf_embedded, sizeof(float) * d_hidden * batch_size);
 
-        // Layer Norm
-        layer_normalize(d_hidden, bufs_ln2[batch_idx], W_ln2, B_ln2, bufs_layer_norm[batch_idx], ones);
-        
-    }
+    // Layer Norm
+    layer_normalize(d_hidden, _buf_ln2, W_ln2, B_ln2, _buf_layer_norm, ones, batch_size);
 
-    for (int batch_idx=0; batch_idx<batch_size; batch_idx++) {
-        // FFN1
-        layer_linear(d_ffn, d_hidden, bufs_ln2[batch_idx], W_ffn1, B_ffn1, bufs_ffn1[batch_idx]);
+    // FFN1
+    layer_linear(d_ffn, d_hidden, _buf_ln2, W_ffn1, B_ffn1, _buf_ffn1, batch_size);
+    layer_GeLU(d_ffn, _buf_ffn1, batch_size);
 
-        // Activation: GeLU
-        layer_GeLU(d_ffn, bufs_ffn1[batch_idx]);
+    // FFN2
+    layer_linear(d_hidden, d_ffn, _buf_ffn1, W_ffn2, B_ffn2, _buf_ffn2, batch_size);
 
-    }
+    // Residual connection - Sum
+    cblas_saxpy(d_hidden * batch_size, 1.0, _buf_ffn2, 1, _buf_embedded, 1);
 
-    for (int batch_idx=0; batch_idx<batch_size; batch_idx++) {
-        // FFN2
-        layer_linear(d_hidden, d_ffn, bufs_ffn1[batch_idx], W_ffn2, B_ffn2, bufs_ffn2[batch_idx]);
-
-        // Residual connection - Sum
-        cblas_saxpy(d_hidden, 1.0, bufs_ffn2[batch_idx], 1, bufs_embedded[batch_idx], 1);
-
-        // Copy output
-        memcpy(last_output_temp + batch_idx * d_hidden, bufs_embedded[batch_idx], sizeof(float) * d_hidden);
-    }
+    // Copy output
+    memcpy(last_output, _buf_embedded, sizeof(float) * d_hidden * batch_size);
     
     // For next inference
     _num_inferenced_token++;
@@ -390,6 +391,18 @@ void Decoder::forward_batch(int batch_size, float *last_input, float *last_outpu
     _debug_eta_total += eta;
     _debug_eta_last = eta;
     #endif
+
+    // FREE BUFFER POINTERS
+    free(bufs_embedded);
+    free(bufs_ln1);
+    free(bufs_layer_norm);
+    free(bufs_attn);
+    free(bufs_sha);
+    free(bufs_o);
+    free(bufs_ln2);
+    free(bufs_ffn1);
+    free(bufs_ffn2);
+
 }
 
 GPT2Model::GPT2Model(int num_decoders, int d_hidden, int d_head, int d_ffn) {
