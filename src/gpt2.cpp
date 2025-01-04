@@ -257,7 +257,6 @@ void Decoder::forward(float *last_input, float *last_output) {
 }
 
 void Decoder::forward_batch(int batch_size, float *last_input, float *last_output) {
-
     // DEBUG START
     #ifdef DEBUG
     struct timeval start_time, end_time;
@@ -277,75 +276,99 @@ void Decoder::forward_batch(int batch_size, float *last_input, float *last_outpu
     float *last_input_temp = last_input;
     float *last_output_temp = last_output;
 
+    float **bufs_embedded = (float **)malloc(sizeof(float *) * batch_size);
+    float **bufs_ln1 = (float **)malloc(sizeof(float *) * batch_size);
+    float **bufs_layer_norm = (float **)malloc(sizeof(float *) * batch_size);
+    float **bufs_attn = (float **)malloc(sizeof(float *) * batch_size);
+    float **bufs_sha = (float **)malloc(sizeof(float *) * batch_size);
+    float **bufs_o = (float **)malloc(sizeof(float *) * batch_size);
+    float **bufs_ln2 = (float **)malloc(sizeof(float *) * batch_size);
+    float **bufs_ffn1 = (float **)malloc(sizeof(float *) * batch_size);
+    float **bufs_ffn2 = (float **)malloc(sizeof(float *) * batch_size);
+
+    float **Qs = (float **)malloc(sizeof(float *) * batch_size);
+    float **Ks = (float **)malloc(sizeof(float *) * batch_size);
+    float **Vs = (float **)malloc(sizeof(float *) * batch_size);
+
     for (int batch_idx=0; batch_idx<batch_size; batch_idx++) {
-        // For convenience
+        bufs_embedded[batch_idx] = _buf_embedded + batch_idx * d_hidden;
+        bufs_ln1[batch_idx] = _buf_ln1 + batch_idx * d_hidden;
+        bufs_layer_norm[batch_idx] = _buf_layer_norm + batch_idx * d_hidden;
+        bufs_attn[batch_idx] = _buf_attn + batch_idx * DECODER_NUM_TOKEN_INIT;
+        bufs_sha[batch_idx] = _buf_sha + batch_idx * d_hidden;
+        bufs_o[batch_idx] = _buf_o + batch_idx * d_hidden;
+        bufs_ln2[batch_idx] = _buf_ln2 + batch_idx * d_hidden;
+        bufs_ffn1[batch_idx] = _buf_ffn1 + batch_idx * d_ffn;
+        bufs_ffn2[batch_idx] = _buf_ffn2 + batch_idx * d_hidden;
 
+        Qs[batch_idx] = Q + batch_idx * d_hidden;
+        Ks[batch_idx] = K + batch_idx * d_hidden * DECODER_NUM_TOKEN_INIT;
+        Vs[batch_idx] = V + batch_idx * d_hidden * DECODER_NUM_TOKEN_INIT;
+    }
 
-        float *W_Q = this->W_Q, *W_K = this->W_K, *W_V = this->W_V, *W_O = this->W_O;
-        float *B_Q = this->B_Q, *B_K = this->B_K, *B_V = this->B_V, *B_O = this->B_O;
-
-        float *W_ffn1 = this->W_ffn1, *W_ffn2 = this->W_ffn2;
-        float *B_ffn1 = this->B_ffn1, *B_ffn2 = this->B_ffn2;
-        
-        float *W_ln1 = this->W_ln1, *W_ln2 = this->W_ln2;
-        float *B_ln1 = this->B_ln1, *B_ln2 = this->B_ln2;
-
-        float *Q = this->Q;
-        float *K = this->K + batch_idx * d_hidden * DECODER_NUM_TOKEN_INIT;
-        float *V = this->V + batch_idx * d_hidden * DECODER_NUM_TOKEN_INIT;
-
+    for (int batch_idx=0; batch_idx<batch_size; batch_idx++) {
         // Residual Connection - Fanout
-        memcpy(_buf_embedded, last_input_temp, sizeof(float) * this->d_hidden);
-        memcpy(_buf_ln1, last_input_temp, sizeof(float) * this->d_hidden);
+        memcpy(bufs_embedded[batch_idx], last_input_temp + batch_idx * d_hidden, sizeof(float) * this->d_hidden);
+        memcpy(bufs_ln1[batch_idx], last_input_temp + batch_idx * d_hidden, sizeof(float) * this->d_hidden);
 
         // Layer Normalization
-        layer_normalize(d_hidden, _buf_ln1, W_ln1, B_ln1, _buf_layer_norm, ones);
+        layer_normalize(d_hidden, bufs_ln1[batch_idx], W_ln1, B_ln1, bufs_layer_norm[batch_idx], ones);
+    }
         
+    for (int batch_idx=0; batch_idx<batch_size; batch_idx++) {
         // Compute QKV
-        layer_linear(d_hidden, d_hidden, _buf_ln1, W_Q, B_Q, Q);
-        layer_linear(d_hidden, d_hidden, _buf_ln1, W_K, B_K, K + d_hidden * num_inferenced);
-        layer_linear(d_hidden, d_hidden, _buf_ln1, W_V, B_V, V + d_hidden * num_inferenced);
+        layer_linear(d_hidden, d_hidden, bufs_ln1[batch_idx], W_Q, B_Q, Qs[batch_idx]);
+        layer_linear(d_hidden, d_hidden, bufs_ln1[batch_idx], W_K, B_K, Ks[batch_idx] + d_hidden * num_inferenced);
+        layer_linear(d_hidden, d_hidden, bufs_ln1[batch_idx], W_V, B_V, Vs[batch_idx] + d_hidden * num_inferenced);
 
+    }
+
+    for (int batch_idx=0; batch_idx<batch_size; batch_idx++) {
         // Compute MHA
         for (int i=0; i<d_head; i++) {
             // Attention
-            cblas_sgemv(CblasColMajor, CblasTrans, d_hid_per_head, num_inferenced+1, 1.0/sqrtf(d_hid_per_head), K + i * d_hid_per_head, d_hidden, Q + i * d_hid_per_head, 1, 0.0, _buf_attn, 1);
+            cblas_sgemv(CblasColMajor, CblasTrans, d_hid_per_head, num_inferenced+1, 1.0/sqrtf(d_hid_per_head), Ks[batch_idx] + i * d_hid_per_head, d_hidden, Qs[batch_idx] + i * d_hid_per_head, 1, 0.0, bufs_attn[batch_idx], 1);
             
             // Softmax
-            layer_softmax(num_inferenced+1, _buf_attn);
+            layer_softmax(num_inferenced+1, bufs_attn[batch_idx]);
 
             // SHA
-            cblas_sgemv(CblasColMajor, CblasNoTrans, d_hid_per_head, num_inferenced+1, 1.0, V + i * d_hid_per_head, d_hidden, _buf_attn, 1, 0.0, _buf_sha + i * d_hid_per_head, 1);
+            cblas_sgemv(CblasColMajor, CblasNoTrans, d_hid_per_head, num_inferenced+1, 1.0, Vs[batch_idx] + i * d_hid_per_head, d_hidden, bufs_attn[batch_idx], 1, 0.0, bufs_sha[batch_idx] + i * d_hid_per_head, 1);
         }
 
+    }
+
+    for (int batch_idx=0; batch_idx<batch_size; batch_idx++) {
         // MHA
-        layer_linear(d_hidden, d_hidden, _buf_sha, W_O, B_O, _buf_o);
+        layer_linear(d_hidden, d_hidden, bufs_sha[batch_idx], W_O, B_O, bufs_o[batch_idx]);
 
         // Residual Connection - Sum and Fanout
-        cblas_saxpy(d_hidden, 1.0, _buf_o, 1, _buf_embedded, 1);
-        memcpy(_buf_ln2, _buf_embedded, sizeof(float) * d_hidden);
+        cblas_saxpy(d_hidden, 1.0, bufs_o[batch_idx], 1, bufs_embedded[batch_idx], 1);
+        memcpy(bufs_ln2[batch_idx], bufs_embedded[batch_idx], sizeof(float) * d_hidden);
 
         // Layer Norm
-        layer_normalize(d_hidden, _buf_ln2, W_ln2, B_ln2, _buf_layer_norm, ones);
+        layer_normalize(d_hidden, bufs_ln2[batch_idx], W_ln2, B_ln2, bufs_layer_norm[batch_idx], ones);
         
+    }
+
+    for (int batch_idx=0; batch_idx<batch_size; batch_idx++) {
         // FFN1
-        layer_linear(d_ffn, d_hidden, _buf_ln2, W_ffn1, B_ffn1, _buf_ffn1);
+        layer_linear(d_ffn, d_hidden, bufs_ln2[batch_idx], W_ffn1, B_ffn1, bufs_ffn1[batch_idx]);
 
         // Activation: GeLU
-        layer_GeLU(d_ffn, _buf_ffn1);
+        layer_GeLU(d_ffn, bufs_ffn1[batch_idx]);
 
+    }
+
+    for (int batch_idx=0; batch_idx<batch_size; batch_idx++) {
         // FFN2
-        layer_linear(d_hidden, d_ffn, _buf_ffn1, W_ffn2, B_ffn2, _buf_ffn2);
+        layer_linear(d_hidden, d_ffn, bufs_ffn1[batch_idx], W_ffn2, B_ffn2, bufs_ffn2[batch_idx]);
 
         // Residual connection - Sum
-        cblas_saxpy(d_hidden, 1.0, _buf_ffn2, 1, _buf_embedded, 1);
+        cblas_saxpy(d_hidden, 1.0, bufs_ffn2[batch_idx], 1, bufs_embedded[batch_idx], 1);
 
         // Copy output
-        memcpy(last_output_temp, _buf_embedded, sizeof(float) * d_hidden);
-
-        // For next batch
-        last_input_temp += d_hidden;
-        last_output_temp += d_hidden;
+        memcpy(last_output_temp + batch_idx * d_hidden, bufs_embedded[batch_idx], sizeof(float) * d_hidden);
     }
     
     // For next inference
