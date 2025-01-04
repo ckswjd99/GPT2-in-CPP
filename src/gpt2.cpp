@@ -46,12 +46,13 @@ char *Tokenizer::decode(int vocab_idx) {
     return vocabs[vocab_idx];
 }
 
-Decoder::Decoder(int d_hidden, int d_head, int d_ffn, int d_batch) {
+Decoder::Decoder(int d_hidden, int d_head, int d_ffn) {
     _num_inferenced_token = 0;
 
     this->d_hidden = d_hidden;
     this->d_head = d_head;
     this->d_ffn = d_ffn;
+    this->d_batch = 1;
 
     float *memories, *mem_last;
 
@@ -65,7 +66,7 @@ Decoder::Decoder(int d_hidden, int d_head, int d_ffn, int d_batch) {
     ones = mem_last;               mem_last += d_hidden;
 
     // WEIGHTS
-    memories = (float *)malloc(sizeof(float) * d_batch * (
+    memories = (float *)malloc(sizeof(float) * (
         d_hidden * 9
         + d_hidden * d_hidden * 4
         + d_ffn * d_hidden * 2
@@ -91,6 +92,31 @@ Decoder::Decoder(int d_hidden, int d_head, int d_ffn, int d_batch) {
     B_ln2 = mem_last;              mem_last += d_hidden;
     B_ffn1 = mem_last;             mem_last += d_ffn;
     B_ffn2 = mem_last;             mem_last += d_hidden;
+
+    // INIT MEMS
+    for (int i=0; i<this->d_hidden; i++) {
+        ones[i] = 1.0;
+    }
+
+    // INIT DEBUG
+    #ifdef DEBUG
+    _debug_flops_total = 0;
+    _debug_flops_last = 0;
+    _debug_eta_total = 0;
+    _debug_eta_last = 0;
+    #endif
+}
+
+void Decoder::prepare_forward(int d_batch) {
+    if (d_batch <= this->d_batch) return;
+
+    this->d_batch = d_batch;
+
+    // Free existing buffers and features
+    free(_mem_start_buffers);
+    free(_mem_start_features);
+
+    float *memories, *mem_last;
 
     // BUFFERS
     memories = (float *)malloc(sizeof(float) * d_batch * (
@@ -122,19 +148,6 @@ Decoder::Decoder(int d_hidden, int d_head, int d_ffn, int d_batch) {
     Q = mem_last;                  mem_last += d_batch * d_hidden;
     K = mem_last;                  mem_last += d_batch * d_hidden * DECODER_NUM_TOKEN_INIT;
     V = mem_last;                  mem_last += d_batch * d_hidden * DECODER_NUM_TOKEN_INIT;
-
-    // INIT MEMS
-    for (int i=0; i<this->d_hidden; i++) {
-        ones[i] = 1.0;
-    }
-
-    // INIT DEBUG
-    #ifdef DEBUG
-    _debug_flops_total = 0;
-    _debug_flops_last = 0;
-    _debug_eta_total = 0;
-    _debug_eta_last = 0;
-    #endif
 }
 
 Decoder::~Decoder() {
@@ -356,12 +369,12 @@ void Decoder::forward_batch(int batch_size, float *last_input, float *last_outpu
     #endif
 }
 
-GPT2Model::GPT2Model(int num_decoders, int d_hidden, int d_head, int d_ffn, int d_batch) {
+GPT2Model::GPT2Model(int num_decoders, int d_hidden, int d_head, int d_ffn) {
     this->num_decoders = num_decoders;
     this->d_hidden = d_hidden;
     this->d_head = d_head;
     this->d_ffn = d_ffn;
-    this->d_batch = d_batch;
+    this->d_batch = 1;
 
     wte = (float *)malloc(sizeof(float) * GPT2_D_VOCABS * GPT2_D_HIDDEN);
     wpe = (float *)malloc(sizeof(float) * GPT2_MAX_TOKEN * GPT2_D_HIDDEN);
@@ -370,7 +383,7 @@ GPT2Model::GPT2Model(int num_decoders, int d_hidden, int d_head, int d_ffn, int 
 
     decoders = (Decoder **)malloc(sizeof(Decoder *) * this->num_decoders);
     for(int i=0; i<this->num_decoders; i++) {
-        decoders[i] = new Decoder(this->d_hidden, this->d_head, this->d_ffn, this->d_batch);
+        decoders[i] = new Decoder(this->d_hidden, this->d_head, this->d_ffn);
     }
 
     _num_inferenced_token = 0;
@@ -380,6 +393,27 @@ GPT2Model::GPT2Model(int num_decoders, int d_hidden, int d_head, int d_ffn, int 
     _buf_input = (float *)malloc(sizeof(float) * d_batch * this->d_hidden);
     _buf_ln_f = (float *)malloc(sizeof(float) * d_batch * this->d_hidden);
     _buf_output = (float *)malloc(sizeof(float) * d_batch * this->d_hidden);
+}
+
+void GPT2Model::prepare_forward(int d_batch) {
+    if (d_batch <= this->d_batch) return;
+
+    this->d_batch = d_batch;
+
+    // Free existing buffers
+    free(_buf_rawinput);
+    free(_buf_input);
+    free(_buf_ln_f);
+    free(_buf_output);
+
+    _buf_rawinput = (float *)malloc(sizeof(float) * d_batch * GPT2_D_VOCABS);
+    _buf_input = (float *)malloc(sizeof(float) * d_batch * this->d_hidden);
+    _buf_ln_f = (float *)malloc(sizeof(float) * d_batch * this->d_hidden);
+    _buf_output = (float *)malloc(sizeof(float) * d_batch * this->d_hidden);
+
+    for (int i=0; i<this->num_decoders; i++) {
+        decoders[i]->prepare_forward(d_batch);
+    }
 }
 
 GPT2Model::~GPT2Model() {
@@ -406,6 +440,8 @@ void GPT2Model::sample(
     float temperature, int top_k, int num_beam,
     int verbose
 ) {
+    prepare_forward(batch_size);
+
     float *input_embed = (float *)malloc(sizeof(float) * batch_size * this->d_hidden);
     float *output_embed = (float *)malloc(sizeof(float) * batch_size * this->d_hidden);
     float *logits = (float *)malloc(sizeof(float) * batch_size * GPT2_D_VOCABS);

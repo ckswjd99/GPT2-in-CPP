@@ -32,7 +32,7 @@ int main(int argc, char *argv[]) {
 
     struct timeval start_time, end_time;
 
-    GPT2Model *gpt2_model = new GPT2Model(GPT2_NUM_DECODERS, GPT2_D_HIDDEN, GPT2_D_HEAD, GPT2_D_FFN, batch_size);
+    GPT2Model *gpt2_model = new GPT2Model(GPT2_NUM_DECODERS, GPT2_D_HIDDEN, GPT2_D_HEAD, GPT2_D_FFN);
     gpt2_model->load("./model/GPT2-124M.mymodel");
 
     Tokenizer *tokenizer = new Tokenizer(GPT2_D_VOCABS, "./vocabs.txt");

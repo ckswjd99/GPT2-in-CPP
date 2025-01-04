@@ -109,8 +109,9 @@ public:
     float _debug_eta_last;    // (msec)
     #endif
 
-    Decoder(int d_hidden, int d_head, int d_ffn, int d_batch);
+    Decoder(int d_hidden, int d_head, int d_ffn);
     ~Decoder();
+    void prepare_forward(int d_batch);
     void forward(float *last_input, float *last_output);
     void forward_batch(int batch_size, float *last_input, float *last_output);
 };
@@ -146,7 +147,7 @@ public:
     float _debug_eta_last;
     #endif
 
-    GPT2Model(int num_decoders, int d_hidden, int d_head, int d_ffn, int d_batch);
+    GPT2Model(int num_decoders, int d_hidden, int d_head, int d_ffn);
     ~GPT2Model();
 
     void sample(
@@ -154,6 +155,7 @@ public:
         float temperature, int top_k, int num_beam, int verbose
     );
     void encode(int vocab_idx, float *embedded);
+    void prepare_forward(int d_batch);
     void forward(float *input_embed, float *output_embed);
     void forward_batch(int batch_size, float *input_embed, float *output_embed);
     void decode(float *embedded, float *logits);
