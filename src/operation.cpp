@@ -80,23 +80,28 @@ void layer_linear(int M, int N, float *input, float *W, float *B, float *output)
 }
 
 void layer_linear(int M, int N, float *input, float *W, float *B, float *output, int batch_size) {
-    for (int i = 0; i < batch_size; i++) {
-        memcpy(output + i * M, B, sizeof(float) * M);
-        // cblas_sgemv(CblasRowMajor, CblasNoTrans, M, N, 1.0, W, N, input + i * N, 1, 1.0, output + i * M, 1);
+    if (batch_size < 8) {
+        for (int i = 0; i < batch_size; i++) {
+            memcpy(output + i * M, B, sizeof(float) * M);
+            cblas_sgemv(CblasRowMajor, CblasNoTrans, M, N, 1.0, W, N, input + i * N, 1, 1.0, output + i * M, 1);
+        }
     }
+    else {
+        for (int i = 0; i < batch_size; i++) {
+            memcpy(output + i * M, B, sizeof(float) * M);
+        }
 
-    cblas_sgemm(
-        CblasRowMajor, CblasNoTrans, CblasTrans,
-        batch_size, M, N,
-        1.0, input, N,
-        W, N,
-        1.0, output, M
-    );
+        cblas_sgemm(
+            CblasRowMajor, CblasNoTrans, CblasTrans,
+            batch_size, M, N,
+            1.0, input, N,
+            W, N,
+            1.0, output, M
+        );
+    }
 }
 
 void layer_softmax(int N, float *vector) {
-    // TODO: SIMD this.
-    
     float sm_max = vector[0];
     float sm_sum = 0;
 
@@ -115,12 +120,14 @@ void layer_GeLU(int N, float *vector) {
 }
 
 void layer_GeLU(int N, float *vector, int batch_size) {
+    const float sqrt_2_over_pi = sqrt(2.0 / M_PI);
     for (int i = 0; i < batch_size; i++) {
         for (int j = 0; j < N; j += 4) {
-            vector[i * N + j] = 0.5 * vector[i * N + j] * (1 + tanh(sqrt(2.0 / M_PI) * (vector[i * N + j] + 0.044715 * powf(vector[i * N + j], 3))));
-            vector[i * N + j + 1] = 0.5 * vector[i * N + j + 1] * (1 + tanh(sqrt(2.0 / M_PI) * (vector[i * N + j + 1] + 0.044715 * powf(vector[i * N + j + 1], 3))));
-            vector[i * N + j + 2] = 0.5 * vector[i * N + j + 2] * (1 + tanh(sqrt(2.0 / M_PI) * (vector[i * N + j + 2] + 0.044715 * powf(vector[i * N + j + 2], 3))));
-            vector[i * N + j + 3] = 0.5 * vector[i * N + j + 3] * (1 + tanh(sqrt(2.0 / M_PI) * (vector[i * N + j + 3] + 0.044715 * powf(vector[i * N + j + 3], 3))));
+            int idx = i * N + j;
+            vector[idx] = 0.5 * vector[idx] * (1 + tanh(sqrt_2_over_pi * (vector[idx] + 0.044715 * vector[idx] * vector[idx] * vector[idx])));
+            vector[idx + 1] = 0.5 * vector[idx + 1] * (1 + tanh(sqrt_2_over_pi * (vector[idx + 1] + 0.044715 * vector[idx + 1] * vector[idx + 1] * vector[idx + 1])));
+            vector[idx + 2] = 0.5 * vector[idx + 2] * (1 + tanh(sqrt_2_over_pi * (vector[idx + 2] + 0.044715 * vector[idx + 2] * vector[idx + 2] * vector[idx + 2])));
+            vector[idx + 3] = 0.5 * vector[idx + 3] * (1 + tanh(sqrt_2_over_pi * (vector[idx + 3] + 0.044715 * vector[idx + 3] * vector[idx + 3] * vector[idx + 3])));
         }
     }    
 }

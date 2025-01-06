@@ -12,6 +12,9 @@ APPLE=$(shell uname -a | grep -q "Darwin" && echo 1 || echo 0)
 ifeq ($(APPLE), 1)
 	COMMON+=-I/opt/homebrew/opt/openblas/include
 	LDFLAGS+=-L/opt/homebrew/opt/openblas/lib
+else
+	COMMON+=-I/usr/include/openblas
+	LDFLAGS+=-L/usr/lib/openblas
 endif
 
 ifeq ($(DEBUG), 1)

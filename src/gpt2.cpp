@@ -281,30 +281,18 @@ void Decoder::forward_batch(int batch_size, float *last_input, float *last_outpu
     float *last_output_temp = last_output;
 
     // MALLOC BUFFER POINTERS
-    float **bufs_embedded = (float **)malloc(sizeof(float *) * batch_size);
     float **bufs_ln1 = (float **)malloc(sizeof(float *) * batch_size);
-    float **bufs_layer_norm = (float **)malloc(sizeof(float *) * batch_size);
     float **bufs_attn = (float **)malloc(sizeof(float *) * batch_size);
     float **bufs_sha = (float **)malloc(sizeof(float *) * batch_size);
-    float **bufs_o = (float **)malloc(sizeof(float *) * batch_size);
-    float **bufs_ln2 = (float **)malloc(sizeof(float *) * batch_size);
-    float **bufs_ffn1 = (float **)malloc(sizeof(float *) * batch_size);
-    float **bufs_ffn2 = (float **)malloc(sizeof(float *) * batch_size);
 
     float **Qs = (float **)malloc(sizeof(float *) * batch_size);
     float **Ks = (float **)malloc(sizeof(float *) * batch_size);
     float **Vs = (float **)malloc(sizeof(float *) * batch_size);
 
     for (int batch_idx=0; batch_idx<batch_size; batch_idx++) {
-        bufs_embedded[batch_idx] = _buf_embedded + batch_idx * d_hidden;
         bufs_ln1[batch_idx] = _buf_ln1 + batch_idx * d_hidden;
-        bufs_layer_norm[batch_idx] = _buf_layer_norm + batch_idx * d_hidden;
         bufs_attn[batch_idx] = _buf_attn + batch_idx * DECODER_NUM_TOKEN_INIT;
         bufs_sha[batch_idx] = _buf_sha + batch_idx * d_hidden;
-        bufs_o[batch_idx] = _buf_o + batch_idx * d_hidden;
-        bufs_ln2[batch_idx] = _buf_ln2 + batch_idx * d_hidden;
-        bufs_ffn1[batch_idx] = _buf_ffn1 + batch_idx * d_ffn;
-        bufs_ffn2[batch_idx] = _buf_ffn2 + batch_idx * d_hidden;
 
         Qs[batch_idx] = Q + batch_idx * d_hidden;
         Ks[batch_idx] = K + batch_idx * d_hidden * DECODER_NUM_TOKEN_INIT;
@@ -321,7 +309,6 @@ void Decoder::forward_batch(int batch_size, float *last_input, float *last_outpu
     // Compute QKV
     layer_linear(d_hidden, d_hidden, _buf_ln1, W_Q, B_Q, Q, batch_size);
     for (int batch_idx=0; batch_idx<batch_size; batch_idx++) {
-        // layer_linear(d_hidden, d_hidden, bufs_ln1[batch_idx], W_Q, B_Q, Qs[batch_idx]);
         layer_linear(d_hidden, d_hidden, bufs_ln1[batch_idx], W_K, B_K, Ks[batch_idx] + d_hidden * num_inferenced);
         layer_linear(d_hidden, d_hidden, bufs_ln1[batch_idx], W_V, B_V, Vs[batch_idx] + d_hidden * num_inferenced);
     }
@@ -397,15 +384,12 @@ void Decoder::forward_batch(int batch_size, float *last_input, float *last_outpu
     #endif
 
     // FREE BUFFER POINTERS
-    // free(bufs_embedded);
-    // free(bufs_ln1);
-    // free(bufs_layer_norm);
-    // free(bufs_attn);
-    // free(bufs_sha);
-    // free(bufs_o);
-    // free(bufs_ln2);
-    // free(bufs_ffn1);
-    // free(bufs_ffn2);
+    free(bufs_ln1);
+    free(bufs_attn);
+    free(bufs_sha);
+    free(Qs);
+    free(Ks);
+    free(Vs);
 
 }
 
@@ -511,7 +495,7 @@ void GPT2Model::sample(
                 encode(vocab_idxs[batch_idx * length + i], input_embed + batch_idx * this->d_hidden);
             }
             forward_batch(batch_size, input_embed, output_embed);
-
+            
             decode(output_embed, logits, batch_size);
 
             for (int batch_idx=0; batch_idx<batch_size; batch_idx++) {
@@ -644,13 +628,25 @@ void GPT2Model::decode(float *embedded, float *logits) {
 }
 
 void GPT2Model::decode(float *embedded, float *logits, int batch_size) {
-    cblas_sgemm(
-        CblasRowMajor, CblasNoTrans, CblasTrans,
-        batch_size, GPT2_D_VOCABS, this->d_hidden,
-        1.0, embedded, this->d_hidden,
-        wte, this->d_hidden,
-        0.0, logits, GPT2_D_VOCABS
-    );
+    if (batch_size < 8) {
+        for (int batch_idx=0; batch_idx<batch_size; batch_idx++) {
+            cblas_sgemv(
+                CblasRowMajor, CblasNoTrans, GPT2_D_VOCABS, this->d_hidden,
+                1.0, wte, this->d_hidden,
+                embedded + batch_idx * this->d_hidden, 1,
+                0.0, logits + batch_idx * GPT2_D_VOCABS, 1
+            );
+        }
+    }
+    else {
+        cblas_sgemm(
+            CblasRowMajor, CblasNoTrans, CblasTrans,
+            batch_size, GPT2_D_VOCABS, this->d_hidden,
+            1.0, embedded, this->d_hidden,
+            wte, this->d_hidden,
+            0.0, logits, GPT2_D_VOCABS
+        );
+    }
 }
 
 float *GPT2Model::find_tensor_target_p(char *tensor_name) {

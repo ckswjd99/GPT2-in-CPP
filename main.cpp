@@ -16,7 +16,7 @@ int main(int argc, char *argv[]) {
 
     int batch_size = atoi(argv[2]);
     if (batch_size < 1) batch_size = 1;
-    if (batch_size > 8) batch_size = 8;
+    // if (batch_size > 8) batch_size = 8;
 
     /* DEBUG */
     #ifdef DEBUG
