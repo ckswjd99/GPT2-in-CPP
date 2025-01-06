@@ -93,6 +93,10 @@ Decoder::Decoder(int d_hidden, int d_head, int d_ffn) {
     B_ffn1 = mem_last;             mem_last += d_ffn;
     B_ffn2 = mem_last;             mem_last += d_hidden;
 
+    // BUFFERS & FEATURES
+    _mem_start_buffers = NULL;
+    _mem_start_features = NULL;
+
     // INIT MEMS
     for (int i=0; i<this->d_hidden; i++) {
         ones[i] = 1.0;
@@ -113,8 +117,8 @@ void Decoder::prepare_forward(int d_batch) {
     this->d_batch = d_batch;
 
     // Free existing buffers and features
-    free(_mem_start_buffers);
-    free(_mem_start_features);
+    if (_mem_start_buffers != NULL) free(_mem_start_buffers);
+    if (_mem_start_features != NULL) free(_mem_start_features);
 
     float *memories, *mem_last;
 
@@ -393,15 +397,15 @@ void Decoder::forward_batch(int batch_size, float *last_input, float *last_outpu
     #endif
 
     // FREE BUFFER POINTERS
-    free(bufs_embedded);
-    free(bufs_ln1);
-    free(bufs_layer_norm);
-    free(bufs_attn);
-    free(bufs_sha);
-    free(bufs_o);
-    free(bufs_ln2);
-    free(bufs_ffn1);
-    free(bufs_ffn2);
+    // free(bufs_embedded);
+    // free(bufs_ln1);
+    // free(bufs_layer_norm);
+    // free(bufs_attn);
+    // free(bufs_sha);
+    // free(bufs_o);
+    // free(bufs_ln2);
+    // free(bufs_ffn1);
+    // free(bufs_ffn2);
 
 }
 
@@ -487,7 +491,7 @@ void GPT2Model::sample(
     // Prepare input
     const int sample_vocabs[] = {29193, 16170, 16157, 16279, 30871, 36307, 9126, 4933, };
     for (int batch_idx=0; batch_idx < batch_size; batch_idx++) {
-        vocab_idxs[batch_idx * length + 0] = sample_vocabs[batch_idx];
+        vocab_idxs[batch_idx * length + 0] = sample_vocabs[batch_idx % 8];
     }
 
     // Inference
@@ -507,9 +511,11 @@ void GPT2Model::sample(
                 encode(vocab_idxs[batch_idx * length + i], input_embed + batch_idx * this->d_hidden);
             }
             forward_batch(batch_size, input_embed, output_embed);
+
+            decode(output_embed, logits, batch_size);
+
             for (int batch_idx=0; batch_idx<batch_size; batch_idx++) {
-                decode(output_embed + batch_idx * this->d_hidden, logits + batch_idx * this->d_hidden);
-                vocab_idxs[batch_idx * length + (i+1)] = vector_argmax(GPT2_D_VOCABS, logits + batch_idx * this->d_hidden, 1);
+                vocab_idxs[batch_idx * length + (i+1)] = vector_argmax(GPT2_D_VOCABS, logits + batch_idx * GPT2_D_VOCABS, 1);
             }
 
             if (verbose) print_progress("Inference step", i+1, length-1, 50);
@@ -635,6 +641,16 @@ void GPT2Model::encode(int vocab_idx, float *embedded) {
 
 void GPT2Model::decode(float *embedded, float *logits) {
     cblas_sgemv(CblasRowMajor, CblasNoTrans, GPT2_D_VOCABS, this->d_hidden, 1.0, wte, this->d_hidden, embedded, 1, 0.0, logits, 1);
+}
+
+void GPT2Model::decode(float *embedded, float *logits, int batch_size) {
+    cblas_sgemm(
+        CblasRowMajor, CblasNoTrans, CblasTrans,
+        batch_size, GPT2_D_VOCABS, this->d_hidden,
+        1.0, embedded, this->d_hidden,
+        wte, this->d_hidden,
+        0.0, logits, GPT2_D_VOCABS
+    );
 }
 
 float *GPT2Model::find_tensor_target_p(char *tensor_name) {

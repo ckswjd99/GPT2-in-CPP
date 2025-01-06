@@ -159,6 +159,7 @@ public:
     void forward(float *input_embed, float *output_embed);
     void forward_batch(int batch_size, float *input_embed, float *output_embed);
     void decode(float *embedded, float *logits);
+    void decode(float *embedded, float *logits, int batch_size);
     float *find_tensor_target_p(char *tensor_name);
     void load(char *weight_path);
 };

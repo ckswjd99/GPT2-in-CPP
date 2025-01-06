@@ -82,8 +82,16 @@ void layer_linear(int M, int N, float *input, float *W, float *B, float *output)
 void layer_linear(int M, int N, float *input, float *W, float *B, float *output, int batch_size) {
     for (int i = 0; i < batch_size; i++) {
         memcpy(output + i * M, B, sizeof(float) * M);
-        cblas_sgemv(CblasRowMajor, CblasNoTrans, M, N, 1.0, W, N, input + i * N, 1, 1.0, output + i * M, 1);
+        // cblas_sgemv(CblasRowMajor, CblasNoTrans, M, N, 1.0, W, N, input + i * N, 1, 1.0, output + i * M, 1);
     }
+
+    cblas_sgemm(
+        CblasRowMajor, CblasNoTrans, CblasTrans,
+        batch_size, M, N,
+        1.0, input, N,
+        W, N,
+        1.0, output, M
+    );
 }
 
 void layer_softmax(int N, float *vector) {
